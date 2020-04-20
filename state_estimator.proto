@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package StateEstimator;
+
+
+message Location2D{
+	double latitude = 1;
+	double longitude = 2;
+}
+
+message Vector3D{
+       double x = 1;
+       double y = 2;
+       double z = 3;
+}
+
+message Vector{
+	repeated double v = 1;
+}
+
+message State{
+	Location2D x_own = 1;
+	Vector3D x_gps_ant = 2;
+	repeated Vector Q_position = 3;
+	repeated Vector Q_attitude = 4;
+	repeated Vector Q_velocity = 5;	
+	repeated Vector R_position = 6;
+	repeated Vector R_attitude = 7;
+	repeated Vector R_velocity = 8;	
+}
