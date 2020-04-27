@@ -26,10 +26,16 @@ f_state_estimator::f_state_estimator(const char * name):f_base(name),
 {
   register_fpar("state", (ch_base**)&state, typeid(ch_state).name(),
 		"State channel");
+  register_fpar("eng_state", (ch_base**)&eng_state, typeid(ch_eng_state).name(),
+		"Engine state channel");
   register_fpar("nmea_data_in", (ch_base**)&nmea_data_in,
 		typeid(ch_nmea_data).name(), "Input NMEA data channel");
   register_fpar("nmea_data_out", (ch_base**)&nmea_data_out,
 		typeid(ch_nmea_data).name(), "Output NMEA data channel");
+  register_fpar("n2k_data_in", (ch_base**)&nmea_data_in,
+		typeid(ch_nmea_data).name(), "Input NMEA2000 data channel");
+  register_fpar("n2k_data_out", (ch_base**)&nmea_data_out,
+		typeid(ch_nmea_data).name(), "Output NMEA2000 data channel");
   register_fpar("time_sync", (ch_base**)&time_sync,
 		typeid(ch_time_sync).name(), "Time sync channel");
   register_fpar("max_log_size", &max_log_size, "Maximum size of log file.");
@@ -64,13 +70,13 @@ bool f_state_estimator::load_state()
   latitude = st.x_own().latitude();
   longitude = st.x_own().longitude();
   x_gps_ant << st.x_gps_ant().x(), st.x_gps_ant().y(), st.x_gps_ant().z();
-    if(st.q_position_size() != 3 ||
-       st.q_attitude_size() != 3 ||
-       st.q_velocity_size() != 3 ||       
-       st.r_position_size() != 3 ||
-       st.r_attitude_size() != 3 ||
-       st.r_velocity_size() != 3)      
-      return false;
+  if(st.q_position_size() != 3 ||
+     st.q_attitude_size() != 3 ||
+     st.q_velocity_size() != 3 ||       
+     st.r_position_size() != 3 ||
+     st.r_attitude_size() != 3 ||
+     st.r_velocity_size() != 3)      
+    return false;
   
   for(int i = 0; i < 3; i++){
     if(st.q_position(i).v_size() != 3 ||
@@ -169,9 +175,9 @@ bool f_state_estimator::close_log_file()
   return !log_file_stream.is_open();
 }
 
-bool f_state_estimator::log_nmea_data()
+bool f_state_estimator::log_nmea_data(bool n2k)
 {  
-  s_log_record_header header(get_time(), data_len);
+  s_log_record_header header(get_time(), data_len, n2k);
   log_file_stream.write((const char*)&header, sizeof(header));
   log_file_stream.write((const char*)buffer, data_len);
   
@@ -221,6 +227,57 @@ void f_state_estimator::destroy_run()
 
 bool f_state_estimator::proc()
 {
+
+  // NMEA2000 data handled here
+  // EngineParametersRapidUpdate
+  // EngineParametersDynamic
+  while(1){
+    if(n2k_data_in == nullptr)
+      break;
+    
+    n2k_data_in->pop(buffer, data_len);
+    if(data_len == 0)
+      break;
+
+    const NMEA2000::Data * data =  NMEA2000::GetData(buffer);
+    long long tdata = data->t();
+    switch(data->payload_type()){
+    case NMEA2000::Payload_EngineParametersRapidUpdate:{
+      const NMEA2000::EngineParametersRapidUpdate * pl
+	= data->payload_as_EngineParametersRapidUpdate();
+      eng_state->set_rapid(tdata, (float)((double)pl->engineSpeed() * 0.25),
+			   pl->engineTrim());
+    }
+      if (n2k_data_out)
+	n2k_data_out->push(buffer, data_len);
+      if(!log_nmea_data())
+	return false;
+      break;
+    case NMEA2000::Payload_EngineParametersDynamic:{
+      const NMEA2000::EngineParametersDynamic * pl
+	= data->payload_as_EngineParametersDynamic();
+      eng_state->set_dynamic(tdata, (int) pl->oilPressure(),
+			     (float)pl->oilTemperature(),
+			     (float) pl->temperature(),
+			     (float)((double)pl->alternatorPotential() * 0.01),
+			     (float)((double)pl->fuelRate() * 0.1),
+			     (unsigned int)pl->totalEngineHours(),
+			     (int)pl->coolantPressure(),
+			     (int)pl->fuelPressure(),
+			     pl->discreteStatus1(), pl->discreteStatus2(),
+			     (unsigned char) pl->percentEngineLoad(),
+			     (unsigned char) pl->percentEngineTorque());
+    }
+      if (n2k_data_out)
+	n2k_data_out->push(buffer, data_len);
+      
+      if(!log_nmea_data())
+	return false;
+      
+      break;
+    }
+  }
+  
   // NMEA0183 data handled here
   
   // GGA(position data)
@@ -243,7 +300,7 @@ bool f_state_estimator::proc()
       const NMEA0183::GGA * gga = data->payload_as_GGA();      
       latitude = gga->latitude() * (PI / 180.0);
       longitude = gga->longitude() * (PI / 180.0);
-      altitude = gga->altitude();
+      altitude = gga->altitude() + gga->geoid();
       state->set_position(tdata, gga->latitude(), gga->longitude());
       if(!log_nmea_data())
 	return false;

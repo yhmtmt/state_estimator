@@ -23,15 +23,18 @@ class f_state_estimator: public f_base
 {
 protected:
   ch_state * state;
+  ch_eng_state * eng_state;  
   ch_nmea_data * nmea_data_in;
   ch_nmea_data * nmea_data_out;
+  ch_n2k_data * n2k_data_in;
+  ch_n2k_data * n2k_data_out;
   ch_time_sync * time_sync;
 
   Eigen::Vector3d x_gps_ant; // gps antenna position relative to the boat center
   Eigen::Matrix3d Q_position;// position transition error var/cov-matrix in enu coordinate
   Eigen::Matrix3d Q_velocity;// velocity transition error var/cov-matrix in enu coordinate
   Eigen::Matrix3d Q_attitude;// attitude transition error var/cov-matrix
-  Eigen::Matrix3d R_position;// position observation error var/cov-matrix in enu coordinate
+  Eigen::Matrix3d R_position;// posi2tion observation error var/cov-matrix in enu coordinate
   Eigen::Matrix3d R_velocity;// velocity observation error var/cov-matrix in enu coordinate
   Eigen::Matrix3d R_attitude;// attitude observation error var/cov-matrix
   
@@ -69,17 +72,19 @@ protected:
   bool save_state();
 
   struct s_log_record_header{
+    bool isN2K;
     long long tsys; // system time 
     size_t size; // data size
     s_log_record_header(const long long _tsys, 
-			const size_t _size):tsys(_tsys), size(_size)
+			const size_t _size, const bool n2k = false):
+      tsys(_tsys), size(_size), isN2K(n2k)
     {};
   };
   
   ofstream log_file_stream;
   unsigned int current_log_size;
   unsigned int max_log_size;
-  bool log_nmea_data();
+  bool log_nmea_data(bool n2k = false);
   bool open_log_file();
   bool close_log_file();
 public:
