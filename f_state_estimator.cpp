@@ -22,7 +22,7 @@ DEFINE_FILTER(f_state_estimator)
 
 f_state_estimator::f_state_estimator(const char * name):f_base(name),
   state(nullptr), nmea_data_in(nullptr), nmea_data_out(nullptr),
-  time_sync(nullptr), max_log_size(2<<30)
+  time_sync(nullptr), max_log_size(2<<30), replay(false)
 {
   register_fpar("state", (ch_base**)&state, typeid(ch_state).name(),
 		"State channel");
@@ -40,6 +40,8 @@ f_state_estimator::f_state_estimator(const char * name):f_base(name),
 		typeid(ch_time_sync).name(), "Time sync channel");
   register_fpar("max_log_size", &max_log_size, "Maximum size of log file.");
 
+  register_fpar("replay", &replay, "Replay flag.");
+  
   x_gps_ant << 0, 0, -1;
   
   Q_position = Q_attitude = Q_velocity =
@@ -153,52 +155,57 @@ bool f_state_estimator::save_state()
 
 bool f_state_estimator::open_log_file()
 {
-  char filepath[2048];
-  snprintf(filepath, 2048, "%s/%s_%lld.nmea",
-	   f_base::get_data_path().c_str(),
-	   get_name(), get_time());
-  log_file_stream.open(filepath, ios_base::binary);
-  current_log_size = 0;
-  if(!log_file_stream.is_open()){
-    spdlog::error("[{}] Cannot open logfile at {}.", get_name(), filepath);
+  char file_prefix[2048];
+  snprintf(file_prefix, 2048, "%s_nmea0183", get_name());
+  if(!log_nmea0183.init(f_base::get_data_path(), file_prefix, replay, max_log_size)){
+    spdlog::error("[{}] Failed to open nmea0183 log file at {}", get_name(), f_base::get_data_path());
     return false;
   }
   
-  spdlog::info("[{}] New log file {} opened.", get_name(), filepath);
+  snprintf(file_prefix, 2048, "%s_n2k", get_name());  
+  if(!log_n2k.init(f_base::get_data_path(), file_prefix, replay, max_log_size)){
+    spdlog::error("[{}] Failed to open nmea2000 log file at {}", get_name(), f_base::get_data_path());
+    return false;
+  }
+  
   return true;
 }
 
-bool f_state_estimator::close_log_file()
+void f_state_estimator::close_log_file()
 {
-  log_file_stream.close();
-  log_file_stream.clear();
-  return !log_file_stream.is_open();
+  log_n2k.destroy();
+  log_nmea0183.destroy();
 }
 
-bool f_state_estimator::log_nmea_data(bool n2k)
-{  
-  s_log_record_header header(get_time(), data_len, n2k);
-  log_file_stream.write((const char*)&header, sizeof(header));
-  log_file_stream.write((const char*)buffer, data_len);
-  
-  current_log_size += sizeof(header) + data_len;
-
-  if(current_log_size + sizeof(header) + sizeof(buffer) > max_log_size){
-    if(!close_log_file())
-      return false;
-    if(!open_log_file())
-      return false;
+bool f_state_estimator::get_nmea_data(bool n2k)
+{
+  if(replay){
+    long long t;
+    if(n2k){
+      return log_n2k.read(t, buffer, data_len);
+    }else{
+      return log_nmea0183.read(t, buffer, data_len);
+    }
+  }else{
+    if(n2k){
+      n2k_data_in->pop(buffer, data_len);
+      if(data_len)
+	return log_n2k.write(get_time(), buffer, data_len);
+    }else{
+      nmea_data_in->pop(buffer, data_len);
+      if(data_len)
+	return log_nmea0183.write(get_time(), buffer, data_len);    
+    }
   }
   return true;
 }
 
 bool f_state_estimator::init_run()
 {
-  
   if(!open_log_file()){
     return false;
   }
-
+  
   if(!load_state()){
     spdlog::error("[{}] Failed to load state file.", get_name());
   }
@@ -221,8 +228,8 @@ void f_state_estimator::destroy_run()
   if(!save_state()){
     spdlog::error("[{}] Failed to save state file.", get_name());
   }
-  
-  close_log_file();  
+
+  close_log_file();
 }
 
 bool f_state_estimator::proc()
@@ -235,10 +242,14 @@ bool f_state_estimator::proc()
     if(n2k_data_in == nullptr)
       break;
     
-    n2k_data_in->pop(buffer, data_len);
+    if(!get_nmea_data(true)){
+      spdlog::error("[{}] Failed to get n2k data.", get_name());
+      return false;
+    }
+    
     if(data_len == 0)
       break;
-
+    
     const NMEA2000::Data * data =  NMEA2000::GetData(buffer);
     long long tdata = data->t();
     switch(data->payload_type()){
@@ -250,8 +261,6 @@ bool f_state_estimator::proc()
     }
       if (n2k_data_out)
 	n2k_data_out->push(buffer, data_len);
-      if(!log_nmea_data())
-	return false;
       break;
     case NMEA2000::Payload_EngineParametersDynamic:{
       const NMEA2000::EngineParametersDynamic * pl
@@ -270,10 +279,7 @@ bool f_state_estimator::proc()
     }
       if (n2k_data_out)
 	n2k_data_out->push(buffer, data_len);
-      
-      if(!log_nmea_data())
-	return false;
-      
+           
       break;
     }
   }
@@ -289,9 +295,12 @@ bool f_state_estimator::proc()
   // MDA(weather data)
 
   while(1){
-    nmea_data_in->pop(buffer, data_len);
+    if(!get_nmea_data(false)){
+      spdlog::error("[{}] Failed to get nmea0183 data.", get_name());
+      return false;
+    }
     if(data_len == 0)
-      break;
+      break;    
 
     const NMEA0183::Data * data = NMEA0183::GetData(buffer);
     long long tdata = data->t();
@@ -302,8 +311,6 @@ bool f_state_estimator::proc()
       longitude = gga->longitude() * (PI / 180.0);
       altitude = gga->altitude() + gga->geoid();
       state->set_position(tdata, gga->latitude(), gga->longitude());
-      if(!log_nmea_data())
-	return false;
       
 
       Eigen::Vector3d x_ecef_new;
@@ -365,8 +372,6 @@ bool f_state_estimator::proc()
       const NMEA0183::VTG * vtg = data->payload_as_VTG();
       cog = vtg->cogTrue() * (PI / 180.0);
       sog = vtg->sogN() * KNOT;
-      if(!log_nmea_data())
-	return false;
 
       angle_drift = normalize_angle_rad(cog - yaw);
       double unew = sog * cos(angle_drift);
@@ -382,8 +387,6 @@ bool f_state_estimator::proc()
     }break;
     case NMEA0183::Payload_ZDA:{
       const NMEA0183::ZDA * zda = data->payload_as_ZDA();
-      if(!log_nmea_data())
-	return false;
 	
     }break;
     case NMEA0183::Payload_PSAT:{
@@ -398,8 +401,6 @@ bool f_state_estimator::proc()
 	double yawnew = y * (PI / 180.0);
 	  
 	state->set_attitude(tdata, r, p, y);
-      	if(!log_nmea_data())
-	  return false;
 
 	if(thpr != 0){
 	  double inv_tdiff = (double)SEC / (double)(tdata - thpr);
@@ -421,16 +422,11 @@ bool f_state_estimator::proc()
     case NMEA0183::Payload_HEV:{
       const NMEA0183::HEV * hev = data->payload_as_HEV();
       state->set_alt(tdata, hev->heave());
-      if(!log_nmea_data())
-	return false;
-	
     }break;
     case NMEA0183::Payload_DBT:{
       const NMEA0183::DBT * dbt = data->payload_as_DBT();
       tdbt = tdata;
       state->set_depth(tdata, dbt->depthM());
-      if(!log_nmea_data())
-	return false;	
     }break;
     case NMEA0183::Payload_MDA:{
       const NMEA0183::MDA * mda = data->payload_as_MDA();
@@ -440,15 +436,10 @@ bool f_state_estimator::proc()
 			 mda->dewPoint(),
 			 mda->windDirectionTrue(),
 			 mda->windSpeedMps());
-      if(!log_nmea_data())
-	return false;	
     }break;
     default:
       if(nmea_data_out)
 	nmea_data_out->push(buffer, data_len);
-      
-      if(!log_nmea_data())
-	return false;
     }
   }
   

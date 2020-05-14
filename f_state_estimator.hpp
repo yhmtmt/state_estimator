@@ -71,22 +71,16 @@ protected:
   bool load_state();
   bool save_state();
 
-  struct s_log_record_header{
-    bool isN2K;
-    long long tsys; // system time 
-    size_t size; // data size
-    s_log_record_header(const long long _tsys, 
-			const size_t _size, const bool n2k = false):
-      tsys(_tsys), size(_size), isN2K(n2k)
-    {};
-  };
-  
   ofstream log_file_stream;
   unsigned int current_log_size;
   unsigned int max_log_size;
-  bool log_nmea_data(bool n2k = false);
+
+  c_log log_nmea0183, log_n2k;
+  bool replay;
+  
+  bool get_nmea_data(bool n2k = false);
   bool open_log_file();
-  bool close_log_file();
+  void close_log_file();
 public:
   f_state_estimator(const char * name);
   virtual ~f_state_estimator();
