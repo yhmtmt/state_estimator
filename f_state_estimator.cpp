@@ -22,6 +22,7 @@ DEFINE_FILTER(f_state_estimator)
 
 f_state_estimator::f_state_estimator(const char * name):f_base(name),
   state(nullptr), nmea_data_in(nullptr), nmea_data_out(nullptr),
+  n2k_data_in(nullptr), n2k_data_out(nullptr),
   time_sync(nullptr), max_log_size(2<<30), replay(false)
 {
   register_fpar("state", (ch_base**)&state, typeid(ch_state).name(),
@@ -32,10 +33,10 @@ f_state_estimator::f_state_estimator(const char * name):f_base(name),
 		typeid(ch_nmea_data).name(), "Input NMEA data channel");
   register_fpar("nmea_data_out", (ch_base**)&nmea_data_out,
 		typeid(ch_nmea_data).name(), "Output NMEA data channel");
-  register_fpar("n2k_data_in", (ch_base**)&nmea_data_in,
-		typeid(ch_nmea_data).name(), "Input NMEA2000 data channel");
-  register_fpar("n2k_data_out", (ch_base**)&nmea_data_out,
-		typeid(ch_nmea_data).name(), "Output NMEA2000 data channel");
+  register_fpar("n2k_data_in", (ch_base**)&n2k_data_in,
+		typeid(ch_n2k_data).name(), "Input NMEA2000 data channel");
+  register_fpar("n2k_data_out", (ch_base**)&n2k_data_out,
+		typeid(ch_n2k_data).name(), "Output NMEA2000 data channel");
   register_fpar("time_sync", (ch_base**)&time_sync,
 		typeid(ch_time_sync).name(), "Time sync channel");
   register_fpar("max_log_size", &max_log_size, "Maximum size of log file.");
@@ -45,16 +46,12 @@ f_state_estimator::f_state_estimator(const char * name):f_base(name),
   x_gps_ant << 0, 0, -1;
   
   Q_position = Q_attitude = Q_velocity =
-    R_position = R_attitude = R_velocity = Eigen::Matrix3d::Ones();
+    R_position = R_attitude = R_velocity = Eigen::Matrix3d::Identity();
   
 }
 
 f_state_estimator::~f_state_estimator()
-{
-  char filepath[2048];
-  snprintf(filepath, 2048, "%s/%s.state",
-	   f_base::get_log_path().c_str(), get_name());
-  
+{  
 }
   
 bool f_state_estimator::load_state()
@@ -105,8 +102,8 @@ bool f_state_estimator::load_state()
 bool f_state_estimator::save_state()
 {
   char filepath[2048];
-  snprintf(filepath, 2048, "%s/%s.state",
-	   f_base::get_log_path().c_str(), get_name());
+  snprintf(filepath, 2048, "%s/%s.json",
+	   f_base::get_data_path().c_str(), get_name());
 
   StateEstimator::State st;
   StateEstimator::Location2D _x_own;
@@ -126,6 +123,7 @@ bool f_state_estimator::save_state()
   StateEstimator::Vector * _R_position[3];
   StateEstimator::Vector * _R_attitude[3];
   StateEstimator::Vector * _R_velocity[3];
+
   for(int i = 0; i < 3; i++){
     _Q_position[i] = st.add_q_position();
     _Q_attitude[i] = st.add_q_attitude();
@@ -149,7 +147,10 @@ bool f_state_estimator::save_state()
     spdlog::error("[{}] Failed to save {}.", get_name(), filepath);
     return false;
   }
-   
+  
+  st.release_x_own();
+  st.release_x_gps_ant();
+  
   return true;
 }
 
@@ -225,6 +226,7 @@ bool f_state_estimator::init_run()
 
 void f_state_estimator::destroy_run()
 {
+
   if(!save_state()){
     spdlog::error("[{}] Failed to save state file.", get_name());
   }
@@ -234,7 +236,6 @@ void f_state_estimator::destroy_run()
 
 bool f_state_estimator::proc()
 {
-
   // NMEA2000 data handled here
   // EngineParametersRapidUpdate
   // EngineParametersDynamic
@@ -256,6 +257,7 @@ bool f_state_estimator::proc()
     case NMEA2000::Payload_EngineParametersRapidUpdate:{
       const NMEA2000::EngineParametersRapidUpdate * pl
 	= data->payload_as_EngineParametersRapidUpdate();
+      cout << "Rapid:" << pl->engineSpeed() * 0.25 << endl;
       eng_state->set_rapid(tdata, (float)((double)pl->engineSpeed() * 0.25),
 			   pl->engineTrim());
     }
@@ -265,6 +267,7 @@ bool f_state_estimator::proc()
     case NMEA2000::Payload_EngineParametersDynamic:{
       const NMEA2000::EngineParametersDynamic * pl
 	= data->payload_as_EngineParametersDynamic();
+      cout << "Dynamic:" <<  pl->temperature() << "," << pl->alternatorPotential() << endl;
       eng_state->set_dynamic(tdata, (int) pl->oilPressure(),
 			     (float)pl->oilTemperature(),
 			     (float) pl->temperature(),
@@ -283,6 +286,7 @@ bool f_state_estimator::proc()
       break;
     }
   }
+
   
   // NMEA0183 data handled here
   
@@ -306,7 +310,8 @@ bool f_state_estimator::proc()
     long long tdata = data->t();
     switch(data->payload_type()){
     case NMEA0183::Payload_GGA:{
-      const NMEA0183::GGA * gga = data->payload_as_GGA();      
+      const NMEA0183::GGA * gga = data->payload_as_GGA();
+      cout << "GGA:" << gga->latitude() << "," << gga->longitude() << endl;
       latitude = gga->latitude() * (PI / 180.0);
       longitude = gga->longitude() * (PI / 180.0);
       altitude = gga->altitude() + gga->geoid();
@@ -370,9 +375,11 @@ bool f_state_estimator::proc()
     }break;
     case NMEA0183::Payload_VTG:{
       const NMEA0183::VTG * vtg = data->payload_as_VTG();
+      cout << "VTG:" << vtg->cogTrue() << "," << vtg->sogN() << endl;
+      state->set_velocity(tdata, vtg->cogTrue(), vtg->sogN());
       cog = vtg->cogTrue() * (PI / 180.0);
       sog = vtg->sogN() * KNOT;
-
+      
       angle_drift = normalize_angle_rad(cog - yaw);
       double unew = sog * cos(angle_drift);
       double vnew = sog * sin(angle_drift);
@@ -393,6 +400,7 @@ bool f_state_estimator::proc()
       const NMEA0183::PSAT * psat = data->payload_as_PSAT();
       const NMEA0183::HPR * hpr = psat->payload_as_HPR();
       if(hpr){
+	cout << "HPR:" << hpr->heading() << "," << hpr->pitch() << "," << hpr->roll() << endl;
 	float y = hpr->heading();
 	float p = hpr->pitch();
 	float r = hpr->roll();
@@ -438,7 +446,7 @@ bool f_state_estimator::proc()
 			 mda->windSpeedMps());
     }break;
     default:
-      if(nmea_data_out)
+      if(nmea_data_out)     
 	nmea_data_out->push(buffer, data_len);
     }
   }
