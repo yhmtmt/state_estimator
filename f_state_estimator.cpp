@@ -23,12 +23,13 @@ DEFINE_FILTER(f_state_estimator)
 f_state_estimator::f_state_estimator(const char * name):f_base(name),
   state(nullptr), nmea_data_in(nullptr), nmea_data_out(nullptr),
   n2k_data_in(nullptr), n2k_data_out(nullptr),
-  time_sync(nullptr), max_log_size(2<<30), replay(false)
+  time_sync(nullptr), max_log_size(2<<30), log_nmea(true), replay(false)
 {
   register_fpar("state", (ch_base**)&state, typeid(ch_state).name(),
 		"State channel");
   register_fpar("eng_state", (ch_base**)&eng_state, typeid(ch_eng_state).name(),
 		"Engine state channel");
+ 
   register_fpar("nmea_data_in", (ch_base**)&nmea_data_in,
 		typeid(ch_nmea_data).name(), "Input NMEA data channel");
   register_fpar("nmea_data_out", (ch_base**)&nmea_data_out,
@@ -41,6 +42,7 @@ f_state_estimator::f_state_estimator(const char * name):f_base(name),
 		typeid(ch_time_sync).name(), "Time sync channel");
   register_fpar("max_log_size", &max_log_size, "Maximum size of log file.");
 
+  register_fpar("log_nmea", &log_nmea, "NMEA logging flag.");
   register_fpar("replay", &replay, "Replay flag.");
   
   x_gps_ant << 0, 0, -1;
@@ -257,7 +259,6 @@ bool f_state_estimator::proc()
     case NMEA2000::Payload_EngineParametersRapidUpdate:{
       const NMEA2000::EngineParametersRapidUpdate * pl
 	= data->payload_as_EngineParametersRapidUpdate();
-      cout << "Rapid:" << pl->engineSpeed() * 0.25 << endl;
       eng_state->set_rapid(tdata, (float)((double)pl->engineSpeed() * 0.25),
 			   pl->engineTrim());
     }
@@ -267,7 +268,6 @@ bool f_state_estimator::proc()
     case NMEA2000::Payload_EngineParametersDynamic:{
       const NMEA2000::EngineParametersDynamic * pl
 	= data->payload_as_EngineParametersDynamic();
-      cout << "Dynamic:" <<  pl->temperature() << "," << pl->alternatorPotential() << endl;
       eng_state->set_dynamic(tdata, (int) pl->oilPressure(),
 			     (float)pl->oilTemperature(),
 			     (float) pl->temperature(),
@@ -311,7 +311,6 @@ bool f_state_estimator::proc()
     switch(data->payload_type()){
     case NMEA0183::Payload_GGA:{
       const NMEA0183::GGA * gga = data->payload_as_GGA();
-      cout << "GGA:" << gga->latitude() << "," << gga->longitude() << endl;
       latitude = gga->latitude() * (PI / 180.0);
       longitude = gga->longitude() * (PI / 180.0);
       altitude = gga->altitude() + gga->geoid();
@@ -375,7 +374,6 @@ bool f_state_estimator::proc()
     }break;
     case NMEA0183::Payload_VTG:{
       const NMEA0183::VTG * vtg = data->payload_as_VTG();
-      cout << "VTG:" << vtg->cogTrue() << "," << vtg->sogN() << endl;
       state->set_velocity(tdata, vtg->cogTrue(), vtg->sogN());
       cog = vtg->cogTrue() * (PI / 180.0);
       sog = vtg->sogN() * KNOT;
@@ -400,7 +398,6 @@ bool f_state_estimator::proc()
       const NMEA0183::PSAT * psat = data->payload_as_PSAT();
       const NMEA0183::HPR * hpr = psat->payload_as_HPR();
       if(hpr){
-	cout << "HPR:" << hpr->heading() << "," << hpr->pitch() << "," << hpr->roll() << endl;
 	float y = hpr->heading();
 	float p = hpr->pitch();
 	float r = hpr->roll();
