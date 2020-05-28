@@ -43,7 +43,7 @@ protected:
   Eigen::Matrix3d P_velocity; // velocity estimation error var/cov-matrix (currently is R_attitude)
   
   unsigned char buffer[256];
-  size_t data_len;
+  unsigned int data_len;
   
   long long tvtg;
   double sog /*speed in mps*/, cog /* Course in radian */;
@@ -76,6 +76,7 @@ protected:
   unsigned int max_log_size;
 
   c_log log_nmea0183, log_n2k;
+  bool log_nmea;
   bool replay;
   
   bool get_nmea_data(bool n2k = false);
