@@ -57,7 +57,7 @@ protected:
   Eigen::Matrix3d Rbody;
   Eigen::Vector3d vrot;
   
-  long long tgga;
+  long long tgll;
   double latitude, longitude, altitude; // popsition in radian
   Eigen::Vector3d x_ecef;
   // kalman filter optimal estimation 

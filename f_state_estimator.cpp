@@ -214,7 +214,7 @@ bool f_state_estimator::init_run()
   }
 
   // time record of each nmea sentence is initialized as zero.
-  tvtg = thpr = tgga = tdbt = 0;
+  tvtg = thpr = tgll = tdbt = 0;
 
   // accelerations are initialized as zero.
   du_dt = dv_dt = droll_dt = dpitch_dt = dyaw_dt = 0.0;
@@ -290,7 +290,7 @@ bool f_state_estimator::proc()
   
   // NMEA0183 data handled here
   
-  // GGA(position data)
+  // GLL(position data)
   // VTG(velocity data)
   // ZDA(time data)
   // PSAT,HPR(v104's attitude data)
@@ -309,19 +309,18 @@ bool f_state_estimator::proc()
     const NMEA0183::Data * data = NMEA0183::GetData(buffer);
     long long tdata = data->t();
     switch(data->payload_type()){
-    case NMEA0183::Payload_GGA:{
-      const NMEA0183::GGA * gga = data->payload_as_GGA();
-      latitude = gga->latitude() * (PI / 180.0);
-      longitude = gga->longitude() * (PI / 180.0);
-      altitude = gga->altitude() + gga->geoid();
-      state->set_position(tdata, gga->latitude(), gga->longitude());
+    case NMEA0183::Payload_GLL:{
+      const NMEA0183::GLL * gll = data->payload_as_GLL();
+      latitude = gll->latitude() * (PI / 180.0);
+      longitude = gll->longitude() * (PI / 180.0);
+      state->set_position(tdata, gll->latitude(), gll->longitude());
       
 
       Eigen::Vector3d x_ecef_new;
       blhtoecef(latitude, longitude, altitude,
 		x_ecef_new(0), x_ecef_new(1), x_ecef_new(2));
-      if(tgga != 0){
-	double tdelta = (double)(tdata - tgga) / (double)SEC;
+      if(tgll != 0){
+	double tdelta = (double)(tdata - tgll) / (double)SEC;
 	double c = cos(yaw), s = sin(yaw); // optimal yaw would be used in the future
 	// subtracting velocity due to antena rotation, and rotatin the vector
 	// by yaw to convert to world coordinate.
@@ -370,7 +369,7 @@ bool f_state_estimator::proc()
       }
       x_ecef = x_ecef_new;
       getwrldrot(latitude_opt, longitude_opt, Renu);
-      tgga = tdata;
+      tgll = tdata;
     }break;
     case NMEA0183::Payload_VTG:{
       const NMEA0183::VTG * vtg = data->payload_as_VTG();
@@ -426,6 +425,7 @@ bool f_state_estimator::proc()
     }break;
     case NMEA0183::Payload_HEV:{
       const NMEA0183::HEV * hev = data->payload_as_HEV();
+      altitude = hev->heave();
       state->set_alt(tdata, hev->heave());
     }break;
     case NMEA0183::Payload_DBT:{
