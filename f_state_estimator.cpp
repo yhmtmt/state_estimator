@@ -192,11 +192,11 @@ bool f_state_estimator::get_nmea_data(bool n2k)
   }else{
     if(n2k){
       n2k_data_in->pop(buffer, data_len);
-      if(data_len)
+      if(log_nmea && data_len)
 	return log_n2k.write(get_time(), buffer, data_len);
     }else{
       nmea_data_in->pop(buffer, data_len);
-      if(data_len)
+      if(log_nmea && data_len)
 	return log_nmea0183.write(get_time(), buffer, data_len);    
     }
   }
@@ -314,7 +314,6 @@ bool f_state_estimator::proc()
       latitude = gll->latitude() * (PI / 180.0);
       longitude = gll->longitude() * (PI / 180.0);
       state->set_position(tdata, gll->latitude(), gll->longitude());
-      
 
       Eigen::Vector3d x_ecef_new;
       blhtoecef(latitude, longitude, altitude,
