@@ -183,7 +183,7 @@ void f_state_estimator::close_log_file()
 bool f_state_estimator::get_nmea_data(bool n2k)
 {
   if(replay){
-    long long t;
+    long long t = get_time();
     if(n2k){
       return log_n2k.read(t, buffer, data_len);
     }else{
