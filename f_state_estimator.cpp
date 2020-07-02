@@ -205,8 +205,10 @@ bool f_state_estimator::get_nmea_data(bool n2k)
 
 bool f_state_estimator::init_run()
 {
-  if(!open_log_file()){
-    return false;
+  if(log_nmea || replay){
+    if(!open_log_file()){
+      return false;
+    }
   }
   
   if(!load_state()){
